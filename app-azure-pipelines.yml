@@ -8,9 +8,10 @@ pool:
 
 variables:
 
-  # --------------------------------------
-  # Application / Infrastructure variables
-  # --------------------------------------
+  # ==========================================
+  # Application / Infrastructure Variables
+  # ==========================================
+
   - name: appPublicIp
     value: '20.219.122.217'
 
@@ -44,7 +45,7 @@ stages:
     steps:
 
     # ======================================================
-    # 1. Checkout application source code
+    # 1. Checkout Repository
     # ======================================================
 
     - checkout: self
@@ -58,6 +59,10 @@ stages:
     - script: |
         set -e
 
+        echo "=========================================="
+        echo "Installing Ansible"
+        echo "=========================================="
+
         sudo apt-get update
         sudo apt-get install -y ansible
 
@@ -66,6 +71,7 @@ stages:
         echo "=========================================="
 
         ansible --version
+
       displayName: Install Ansible
 
 
@@ -82,56 +88,84 @@ stages:
 
 
     # ======================================================
-    # 4. Configure SSH
+    # 4. Install SSH Key
+    # ======================================================
+
+    - task: InstallSSHKey@0
+      displayName: Install SSH Private Key
+
+      inputs:
+        knownHostsEntry: '$(appPublicIp)'
+        sshPublicKey: ''
+        sshKeySecureFile: 'id_rsa'
+
+
+    # ======================================================
+    # 5. Verify SSH Key
     # ======================================================
 
     - script: |
         set -e
 
-        echo "Configuring SSH..."
+        echo "=========================================="
+        echo "Checking SSH Configuration"
+        echo "=========================================="
 
-        mkdir -p ~/.ssh
+        echo "SSH directory:"
+        ls -la ~/.ssh
 
-        cp "$(sshKey.secureFilePath)" ~/.ssh/id_rsa
+        echo ""
+        echo "SSH identities available:"
+        ssh-add -L 2>/dev/null || true
 
-        chmod 600 ~/.ssh/id_rsa
+        echo ""
+        echo "Private key files:"
+        find ~/.ssh -maxdepth 1 -type f -name 'id_rsa*' -ls
 
-        touch ~/.ssh/known_hosts
+        echo ""
+        echo "SSH key verification completed."
 
-        ssh-keyscan -H "$(appPublicIp)" >> ~/.ssh/known_hosts
-
-        echo "SSH key configured successfully."
-      displayName: Configure SSH
+      displayName: Verify SSH Configuration
 
 
     # ======================================================
-    # 5. Create Ansible Inventory
+    # 6. Create Ansible Inventory
     # ======================================================
 
     - script: |
         set -e
+
+        echo "=========================================="
+        echo "Creating Ansible Inventory"
+        echo "=========================================="
 
         mkdir -p ansible
 
         cat > ansible/inventory.ini <<EOF
         [frontend]
-        epicbook ansible_host=$(appPublicIp) ansible_user=$(sshUser) ansible_ssh_private_key_file=~/.ssh/id_rsa
+        epicbook ansible_host=$(appPublicIp) ansible_user=$(sshUser) ansible_ssh_private_key_file=$HOME/.ssh/id_rsa
         EOF
 
+        echo ""
         echo "=========================================="
         echo "Generated Ansible Inventory"
         echo "=========================================="
 
         cat ansible/inventory.ini
+
       displayName: Create Ansible Inventory
 
 
     # ======================================================
-    # 6. Create Deployment Variables
+    # 7. Create Deployment Variables
     # ======================================================
 
     - script: |
         set -e
+
+        echo "=========================================="
+        echo "Creating Deployment Variables"
+        echo "=========================================="
 
         mkdir -p ansible
 
@@ -143,6 +177,7 @@ stages:
         mysql_database: "$(mysqlDatabase)"
         EOF
 
+        echo ""
         echo "=========================================="
         echo "Deployment Variables"
         echo "=========================================="
@@ -153,36 +188,87 @@ stages:
         echo "mysql_database: $(mysqlDatabase)"
         echo "mysql_password: ********"
 
+        echo ""
         echo "Deployment variables created successfully."
+
       displayName: Create Deployment Variables
 
 
     # ======================================================
-    # 7. Test SSH Connection
+    # 8. Test SSH Connection
     # ======================================================
 
     - script: |
         set -e
 
-        echo "Testing SSH connection to EpicBook VM..."
+        echo "=========================================="
+        echo "Testing SSH Connection"
+        echo "=========================================="
+
+        echo "Target:"
+        echo "$(sshUser)@$(appPublicIp)"
+
+        echo ""
+        echo "Testing port 22..."
+
+        timeout 10 bash -c \
+          "cat < /dev/null > /dev/tcp/$(appPublicIp)/22"
+
+        echo "Port 22 is reachable."
+
+        echo ""
+        echo "Testing SSH authentication..."
 
         ssh \
-          -i ~/.ssh/id_rsa \
+          -i "$HOME/.ssh/id_rsa" \
+          -o IdentitiesOnly=yes \
+          -o BatchMode=yes \
+          -o ConnectTimeout=15 \
           -o StrictHostKeyChecking=no \
           "$(sshUser)@$(appPublicIp)" \
-          "hostname && echo 'SSH connection successful'"
+          "echo 'SSH connection successful'; hostname; whoami"
+
+        echo ""
+        echo "=========================================="
+        echo "SSH CONNECTION SUCCESSFUL"
+        echo "=========================================="
 
       displayName: Test SSH Connection
 
 
     # ======================================================
-    # 8. Validate Ansible Playbook
+    # 9. Test Ansible Connectivity
     # ======================================================
 
     - script: |
         set -e
 
-        echo "Validating Ansible playbook..."
+        echo "=========================================="
+        echo "Testing Ansible Connectivity"
+        echo "=========================================="
+
+        ansible \
+          -i ansible/inventory.ini \
+          frontend \
+          -m ping \
+          -e "@ansible/deployment-vars.yml"
+
+        echo ""
+        echo "Ansible connectivity test successful."
+
+      displayName: Test Ansible Connectivity
+
+
+    # ======================================================
+    # 10. Validate Ansible Playbook
+    # ======================================================
+
+    - script: |
+        set -e
+
+        echo "=========================================="
+        echo "Validating Ansible Playbook"
+        echo "=========================================="
 
         ansible-playbook \
           -i ansible/inventory.ini \
@@ -190,11 +276,14 @@ stages:
           -e "@ansible/deployment-vars.yml" \
           --syntax-check
 
+        echo ""
+        echo "Ansible syntax validation successful."
+
       displayName: Validate Ansible Playbook
 
 
     # ======================================================
-    # 9. Run Ansible Playbook
+    # 11. Run Ansible Playbook
     # ======================================================
 
     - script: |
@@ -208,5 +297,10 @@ stages:
           -i ansible/inventory.ini \
           ansible/site.yml \
           -e "@ansible/deployment-vars.yml"
+
+        echo ""
+        echo "=========================================="
+        echo "EPICBOOK DEPLOYMENT COMPLETED"
+        echo "=========================================="
 
       displayName: Run Ansible Playbook
