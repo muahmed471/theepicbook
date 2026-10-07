@@ -46,7 +46,7 @@ stages:
       name: sshKey
       displayName: Download SSH Private Key
       inputs:
-        secureFile: 'id_rsa'
+        secureFile: 'id_ed25519'
 
     # --------------------------------------
     # Configure SSH key
