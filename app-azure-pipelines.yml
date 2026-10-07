@@ -45,7 +45,7 @@ stages:
     steps:
 
     # ======================================================
-    # 1. Checkout Repository
+    # 1. Checkout Application Source Code
     # ======================================================
 
     - checkout: self
@@ -66,6 +66,7 @@ stages:
         sudo apt-get update
         sudo apt-get install -y ansible
 
+        echo ""
         echo "=========================================="
         echo "Ansible Version"
         echo "=========================================="
@@ -88,48 +89,56 @@ stages:
 
 
     # ======================================================
-    # 4. Install SSH Key
-    # ======================================================
-
-    - task: InstallSSHKey@0
-      displayName: Install SSH Private Key
-
-      inputs:
-        knownHostsEntry: '$(appPublicIp)'
-        sshPublicKey: ''
-        sshKeySecureFile: 'id_rsa'
-
-
-    # ======================================================
-    # 5. Verify SSH Key
+    # 4. Configure SSH
     # ======================================================
 
     - script: |
         set -e
 
         echo "=========================================="
-        echo "Checking SSH Configuration"
+        echo "Configuring SSH"
         echo "=========================================="
 
-        echo "SSH directory:"
-        ls -la ~/.ssh
+        mkdir -p "$HOME/.ssh"
+
+        # Copy the Azure DevOps Secure File to a known location
+        cp "$(sshKey.secureFilePath)" "$HOME/.ssh/id_rsa"
+
+        # Secure permissions
+        chmod 600 "$HOME/.ssh/id_rsa"
+
+        # Create known_hosts
+        touch "$HOME/.ssh/known_hosts"
+
+        # Add VM host key
+        ssh-keyscan -H "$(appPublicIp)" >> "$HOME/.ssh/known_hosts"
+
+        chmod 644 "$HOME/.ssh/known_hosts"
 
         echo ""
-        echo "SSH identities available:"
-        ssh-add -L 2>/dev/null || true
+        echo "SSH private key installed at:"
+        echo "$HOME/.ssh/id_rsa"
 
         echo ""
-        echo "Private key files:"
-        find ~/.ssh -maxdepth 1 -type f -name 'id_rsa*' -ls
+        echo "Checking SSH private key..."
+
+        test -f "$HOME/.ssh/id_rsa"
+
+        echo "SSH private key exists."
 
         echo ""
-        echo "SSH key verification completed."
+        echo "SSH key fingerprint:"
 
-      displayName: Verify SSH Configuration
+        ssh-keygen -lf "$HOME/.ssh/id_rsa"
+
+        echo ""
+        echo "SSH configuration completed successfully."
+
+      displayName: Configure SSH
 
 
     # ======================================================
-    # 6. Create Ansible Inventory
+    # 5. Create Ansible Inventory
     # ======================================================
 
     - script: |
@@ -157,7 +166,7 @@ stages:
 
 
     # ======================================================
-    # 7. Create Deployment Variables
+    # 6. Create Deployment Variables
     # ======================================================
 
     - script: |
@@ -195,7 +204,7 @@ stages:
 
 
     # ======================================================
-    # 8. Test SSH Connection
+    # 7. Test SSH Connection
     # ======================================================
 
     - script: |
@@ -217,6 +226,13 @@ stages:
         echo "Port 22 is reachable."
 
         echo ""
+        echo "Checking private key..."
+
+        test -f "$HOME/.ssh/id_rsa"
+
+        echo "Private key found."
+
+        echo ""
         echo "Testing SSH authentication..."
 
         ssh \
@@ -224,7 +240,7 @@ stages:
           -o IdentitiesOnly=yes \
           -o BatchMode=yes \
           -o ConnectTimeout=15 \
-          -o StrictHostKeyChecking=no \
+          -o StrictHostKeyChecking=yes \
           "$(sshUser)@$(appPublicIp)" \
           "echo 'SSH connection successful'; hostname; whoami"
 
@@ -237,7 +253,7 @@ stages:
 
 
     # ======================================================
-    # 9. Test Ansible Connectivity
+    # 8. Test Ansible Connectivity
     # ======================================================
 
     - script: |
@@ -254,13 +270,15 @@ stages:
           -e "@ansible/deployment-vars.yml"
 
         echo ""
-        echo "Ansible connectivity test successful."
+        echo "=========================================="
+        echo "ANSIBLE CONNECTIVITY SUCCESSFUL"
+        echo "=========================================="
 
       displayName: Test Ansible Connectivity
 
 
     # ======================================================
-    # 10. Validate Ansible Playbook
+    # 9. Validate Ansible Playbook
     # ======================================================
 
     - script: |
@@ -283,7 +301,7 @@ stages:
 
 
     # ======================================================
-    # 11. Run Ansible Playbook
+    # 10. Run Ansible Playbook
     # ======================================================
 
     - script: |
