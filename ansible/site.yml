@@ -6,13 +6,13 @@
   vars:
     app_dir: /opt/epicbook
     app_user: epicbook
+    node_version: "22.x"
     app_port: 3000
-    node_major_version: "22"
 
   tasks:
 
     # =========================================================
-    # SYSTEM PACKAGES
+    # System packages
     # =========================================================
 
     - name: Update apt cache
@@ -30,7 +30,7 @@
         state: present
 
     # =========================================================
-    # NODE.JS 22
+    # Node.js
     # =========================================================
 
     - name: Check whether Node.js is installed
@@ -46,9 +46,7 @@
         apt-get install -y nodejs
       args:
         executable: /bin/bash
-      when:
-        - node_version_check.rc != 0
-          or not node_version_check.stdout.startswith('v22.')
+      when: node_version_check.rc != 0
 
     - name: Display Node.js version
       ansible.builtin.command:
@@ -71,7 +69,7 @@
         msg: "npm version: {{ npm_version_output.stdout }}"
 
     # =========================================================
-    # APPLICATION USER
+    # Application user
     # =========================================================
 
     - name: Create EpicBook application user
@@ -82,7 +80,7 @@
         create_home: true
 
     # =========================================================
-    # APPLICATION DIRECTORY
+    # Application directory
     # =========================================================
 
     - name: Create EpicBook application directory
@@ -94,7 +92,7 @@
         mode: "0755"
 
     # =========================================================
-    # GITHUB REPOSITORY
+    # Deploy application from GitHub
     # =========================================================
 
     - name: Check whether EpicBook Git repository exists
@@ -103,46 +101,47 @@
       register: git_directory
 
     - name: Clone EpicBook repository
-      become_user: root
-      ansible.builtin.command:
-        cmd: git clone --branch main https://github.com/muahmed471/theepicbook.git {{ app_dir }}
+      ansible.builtin.git:
+        repo: "https://github.com/muahmed471/theepicbook.git"
+        dest: "{{ app_dir }}"
+        version: main
+        force: true
       when: not git_directory.stat.exists
 
     - name: Configure EpicBook Git repository ownership
-      become_user: root
       ansible.builtin.file:
         path: "{{ app_dir }}"
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
         recurse: true
-      when: not git_directory.stat.exists
+      when: git_directory.stat.exists
 
     - name: Configure Git safe directory
-      become_user: root
       ansible.builtin.command:
-        cmd: git config --global --add safe.directory {{ app_dir }}
+        cmd: "git config --global --add safe.directory {{ app_dir }}"
       changed_when: false
 
     - name: Configure EpicBook Git remote
-      become_user: root
       ansible.builtin.command:
-        cmd: git -C {{ app_dir }} remote set-url origin https://github.com/muahmed471/theepicbook.git
+        cmd: "git remote set-url origin https://github.com/muahmed471/theepicbook.git"
+        chdir: "{{ app_dir }}"
       changed_when: false
 
     - name: Fetch latest EpicBook repository
-      become_user: root
       ansible.builtin.command:
-        cmd: git -C {{ app_dir }} fetch origin main
-      when: git_directory.stat.exists
+        cmd: git fetch origin
+        chdir: "{{ app_dir }}"
 
     - name: Reset EpicBook repository to latest main
-      become_user: root
       ansible.builtin.command:
-        cmd: git -C {{ app_dir }} reset --hard origin/main
-      when: git_directory.stat.exists
+        cmd: git reset --hard origin/main
+        chdir: "{{ app_dir }}"
+
+    # =========================================================
+    # Application ownership
+    # =========================================================
 
     - name: Set EpicBook application ownership
-      become_user: root
       ansible.builtin.file:
         path: "{{ app_dir }}"
         owner: "{{ app_user }}"
@@ -150,17 +149,16 @@
         recurse: true
 
     # =========================================================
-    # NPM DEPENDENCIES
+    # Install npm dependencies
     # =========================================================
 
     - name: Install npm dependencies
-      become_user: "{{ app_user }}"
       ansible.builtin.command:
-        cmd: npm install
+        cmd: npm ci
         chdir: "{{ app_dir }}"
 
     # =========================================================
-    # CHECK PACKAGE.JSON
+    # Read package.json
     # =========================================================
 
     - name: Read package.json
@@ -168,8 +166,11 @@
         src: "{{ app_dir }}/package.json"
       register: package_json
 
+    # =========================================================
+    # Build application if build script exists
+    # =========================================================
+
     - name: Build EpicBook application
-      become_user: "{{ app_user }}"
       ansible.builtin.command:
         cmd: npm run build
         chdir: "{{ app_dir }}"
@@ -177,7 +178,18 @@
         - "'build' in ((package_json.content | b64decode | from_json).scripts | default({}))"
 
     # =========================================================
-    # SYSTEMD SERVICE
+    # Fix ownership after npm install/build
+    # =========================================================
+
+    - name: Set final EpicBook application ownership
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        recurse: true
+
+    # =========================================================
+    # Create systemd service
     # =========================================================
 
     - name: Create EpicBook systemd service
@@ -194,39 +206,39 @@
           [Service]
           Type=simple
           User={{ app_user }}
-          Group={{ app_user }}
           WorkingDirectory={{ app_dir }}
-
           Environment=NODE_ENV=production
           Environment=PORT={{ app_port }}
-
           ExecStart=/usr/bin/npm start
-
           Restart=always
           RestartSec=5
 
           [Install]
           WantedBy=multi-user.target
 
-    - name: Reload systemd daemon
+    # =========================================================
+    # Systemd
+    # =========================================================
+
+    - name: Reload systemd
       ansible.builtin.systemd:
         daemon_reload: true
 
-    - name: Enable EpicBook systemd service
+    - name: Enable EpicBook service
       ansible.builtin.systemd:
         name: epicbook
         enabled: true
 
-    - name: Start EpicBook systemd service
+    - name: Restart EpicBook service
       ansible.builtin.systemd:
         name: epicbook
-        state: started
+        state: restarted
 
     # =========================================================
-    # NGINX CONFIGURATION
+    # Nginx configuration
     # =========================================================
 
-    - name: Create EpicBook Nginx configuration
+    - name: Configure Nginx for EpicBook
       ansible.builtin.copy:
         dest: /etc/nginx/sites-available/epicbook
         owner: root
@@ -266,32 +278,28 @@
         path: /etc/nginx/sites-enabled/default
         state: absent
 
+    # =========================================================
+    # Validate Nginx
+    # =========================================================
+
     - name: Test Nginx configuration
       ansible.builtin.command:
         cmd: nginx -t
       changed_when: false
 
-    - name: Enable and restart Nginx
+    - name: Enable Nginx service
       ansible.builtin.systemd:
         name: nginx
         enabled: true
-        state: restarted
 
-    # =========================================================
-    # APPLICATION SERVICE VERIFICATION
-    # =========================================================
-
-    - name: Restart EpicBook application
+    - name: Restart Nginx
       ansible.builtin.systemd:
-        name: epicbook
+        name: nginx
         state: restarted
 
-    - name: Wait for EpicBook application
-      ansible.builtin.wait_for:
-        host: 127.0.0.1
-        port: "{{ app_port }}"
-        delay: 3
-        timeout: 60
+    # =========================================================
+    # Verification
+    # =========================================================
 
     - name: Check EpicBook systemd service
       ansible.builtin.systemd:
@@ -302,28 +310,22 @@
       ansible.builtin.debug:
         msg: "EpicBook service state: {{ epicbook_service.status.ActiveState }}"
 
-    # =========================================================
-    # HTTP VERIFICATION
-    # =========================================================
-
     - name: Check EpicBook HTTP endpoint
       ansible.builtin.uri:
         url: "http://127.0.0.1/"
-        status_code:
-          - 200
-          - 301
-          - 302
+        status_code: 200
+        return_content: false
       register: epicbook_http
-      retries: 5
-      delay: 5
-      until: epicbook_http.status in [200, 301, 302]
+      retries: 10
+      delay: 3
+      until: epicbook_http.status == 200
 
     - name: Display deployment result
       ansible.builtin.debug:
         msg:
           - "=========================================="
           - "EpicBook deployment completed successfully"
-          - "Application service: {{ epicbook_service.status.ActiveState }}"
+          - "EpicBook service: {{ epicbook_service.status.ActiveState }}"
           - "HTTP status: {{ epicbook_http.status }}"
           - "Application port: {{ app_port }}"
           - "Nginx: enabled"
