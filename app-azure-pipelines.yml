@@ -7,8 +7,8 @@ pool:
   vmImage: ubuntu-latest
 
 variables:
-  appPublicIp: 'REPLACE_WITH_APP_PUBLIC_IP'
-  mysqlFqdn: 'REPLACE_WITH_MYSQL_FQDN'
+  appPublicIp: '20.219.122.217'
+  mysqlFqdn: 'epicbookmysql20261007.mysql.database.azure.com'
   sshUser: 'azureuser'
 
 stages:
